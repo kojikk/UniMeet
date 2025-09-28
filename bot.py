@@ -3,9 +3,10 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import BOT_TOKEN, DATABASE_URL, DEBUG
+from config import BOT_TOKEN, DATABASE_URL, DEBUG, ADMIN_IDS
 from database import Database
 from handlers.registration import router as registration_router
+from handlers.admin import router as admin_router
 
 # Настройка логирования
 log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -25,8 +26,13 @@ async def main():
     db = Database(DATABASE_URL)
     await db.init_db()
     
+    # Инициализация админов из конфига
+    for admin_id in ADMIN_IDS:
+        await db.add_admin(admin_id, is_super_admin=True)
+    
     # Регистрация роутеров
     dp.include_router(registration_router)
+    dp.include_router(admin_router)
     
     logger.info("Бот запускается...")
     

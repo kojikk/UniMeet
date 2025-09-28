@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from handlers.states import RegistrationStates, VerificationStates
 from database import Database
 from config import PROFILE_LIMITS, DATABASE_URL
+from utils import is_admin
 
 router = Router()
 db = Database(DATABASE_URL)
@@ -50,19 +51,38 @@ async def start_command(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     user = await db.get_user(message.from_user.id)
     
+    # Если пользователь - админ, показываем админские возможности
+    if is_admin(message):
+        admin_text = "\n\n🔧 **Админские команды:**\n/admin_panel - панель администратора\n/pending - заявки на верификацию"
+    else:
+        admin_text = ""
+    
     if user and user['verification_status'] == 'approved':
         await message.answer(
             "🎉 Добро пожаловать в UniMeetingBot!\n\n"
-            "Ты уже зарегистрирован и верифицирован. Используй команды:\n"
-            "/profile - посмотреть анкету\n"
-            "/edit - редактировать анкету"
+            "Ты уже зарегистрирован и верифицирован.\n\n"
+            "**Доступные команды:**\n"
+            "• /profile - посмотреть анкету\n"
+            "• /edit - редактировать анкету\n\n"
+            "🔍 **Скоро будет доступен поиск анкет других студентов!**" + admin_text
         )
         return
     
     if user and user['verification_status'] == 'pending':
         await message.answer(
             "⏳ Твоя анкета отправлена на модерацию.\n"
-            "Ожидай подтверждения от администраторов."
+            "Ожидай подтверждения от администраторов.\n\n"
+            "После одобрения ты сможешь пользоваться всеми функциями бота!" + admin_text
+        )
+        return
+    
+    if user and user['verification_status'] == 'rejected':
+        await message.answer(
+            "❌ Твоя предыдущая заявка была отклонена.\n\n"
+            "Ты можешь:\n"
+            "• /edit - изменить анкету\n"
+            "• Создать анкету заново\n\n"
+            "После изменений повторно подай заявку на верификацию." + admin_text
         )
         return
     
@@ -218,17 +238,31 @@ async def edit_profile_start(callback: CallbackQuery, state: FSMContext):
 @router.message(VerificationStates.student_card_photo, F.photo)
 async def process_verification_photo(message: Message, state: FSMContext):
     """Обработка фото для верификации"""
+    from handlers.admin import notify_admins_about_verification
+    from aiogram import Bot
+    
     photo_file_id = message.photo[-1].file_id
     
     # Получаем пользователя и создаем заявку на верификацию
     user = await db.get_user(message.from_user.id)
-    await db.create_verification_request(user['id'], photo_file_id)
+    request_id = await db.create_verification_request(user['id'], photo_file_id)
     
     await message.answer(
         "✅ Фото отправлено на модерацию!\n\n"
         "⏳ Ожидай подтверждения от администраторов.\n"
         "Мы уведомим тебя, как только анкета будет проверена."
     )
+    
+    # Уведомляем админов
+    bot = Bot.get_current()
+    verification_data = {
+        'name': user['name'],
+        'course': user['course'],
+        'major': user['major'],
+        'id': request_id
+    }
+    await notify_admins_about_verification(bot, verification_data)
+    
     await state.clear()
 
 @router.message(VerificationStates.student_card_photo)
@@ -255,6 +289,14 @@ async def view_profile(message: Message):
     else:
         await message.answer(profile_text)
 
+def get_rejected_user_menu():
+    """Меню для пользователей с отклоненной заявкой"""
+    keyboard = [
+        [InlineKeyboardButton(text="✏️ Изменить анкету", callback_data="edit_start")],
+        [InlineKeyboardButton(text="📸 Отправить новое фото студбилета", callback_data="resend_verification")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 @router.message(Command("edit"))
 async def edit_profile_command(message: Message, state: FSMContext):
     """Команда редактирования анкеты"""
@@ -271,9 +313,39 @@ async def edit_profile_command(message: Message, state: FSMContext):
         )
         return
     
+    if user['verification_status'] == 'rejected':
+        await message.answer(
+            "❌ Твоя заявка была отклонена.\n\n"
+            "Выбери действие:",
+            reply_markup=get_rejected_user_menu()
+        )
+        return
+    
     await message.answer(
         "✏️ Давай обновим твою анкету!\n\n"
         "Сначала выбери свой курс:",
         reply_markup=get_course_keyboard()
     )
     await state.set_state(RegistrationStates.course)
+
+@router.callback_query(F.data == "edit_start")
+async def edit_start_callback(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование анкеты (callback)"""
+    await callback.message.edit_text(
+        "✏️ Давай обновим твою анкету!\n\n"
+        "Сначала выбери свой курс:",
+        reply_markup=get_course_keyboard()
+    )
+    await state.set_state(RegistrationStates.course)
+
+@router.callback_query(F.data == "resend_verification")
+async def resend_verification_callback(callback: CallbackQuery, state: FSMContext):
+    """Повторная отправка фото для верификации"""
+    await callback.message.edit_text(
+        "📸 Отправь новое фото со своим студенческим билетом:\n\n"
+        "Убедись, что:\n"
+        "• Фото четкое и разборчивое\n"
+        "• Видны все данные студбилета\n"
+        "• Данные соответствуют твоей анкете"
+    )
+    await state.set_state(VerificationStates.student_card_photo)

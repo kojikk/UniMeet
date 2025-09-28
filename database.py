@@ -1,7 +1,7 @@
 import aiosqlite
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 class Database:
     def __init__(self, db_path: str):
@@ -33,8 +33,20 @@ class Database:
                     user_id INTEGER NOT NULL,
                     student_card_photo TEXT NOT NULL,
                     status TEXT DEFAULT 'pending',
+                    admin_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (id)
+                    processed_at TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (admin_id) REFERENCES admins (telegram_id)
+                )
+            ''')
+            
+            # Таблица админов
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    telegram_id INTEGER PRIMARY KEY,
+                    is_super_admin BOOLEAN DEFAULT FALSE,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -104,3 +116,75 @@ class Database:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+    
+    async def get_pending_verifications(self) -> List[Dict[str, Any]]:
+        """Получить все заявки на верификацию со статусом pending"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT vr.*, u.name, u.age, u.course, u.major, u.description, u.photo_file_id, u.telegram_id
+                FROM verification_requests vr
+                JOIN users u ON vr.user_id = u.id
+                WHERE vr.status = 'pending'
+                ORDER BY vr.created_at ASC
+            ''')
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    
+    async def get_verification_by_id(self, request_id: int) -> Optional[Dict[str, Any]]:
+        """Получить заявку на верификацию по ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT vr.*, u.name, u.age, u.course, u.major, u.description, u.photo_file_id, u.telegram_id
+                FROM verification_requests vr
+                JOIN users u ON vr.user_id = u.id
+                WHERE vr.id = ?
+            ''', (request_id,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+    
+    async def process_verification(self, request_id: int, status: str, admin_id: int):
+        """Обработать заявку на верификацию"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Обновляем заявку на верификацию
+            await db.execute('''
+                UPDATE verification_requests 
+                SET status = ?, admin_id = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (status, admin_id, request_id))
+            
+            # Получаем user_id для обновления статуса пользователя
+            cursor = await db.execute(
+                'SELECT user_id FROM verification_requests WHERE id = ?',
+                (request_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                user_id = row[0]
+                # Обновляем статус пользователя
+                await db.execute(
+                    'UPDATE users SET verification_status = ? WHERE id = ?',
+                    (status, user_id)
+                )
+            
+            await db.commit()
+    
+    async def add_admin(self, telegram_id: int, is_super_admin: bool = False):
+        """Добавить админа"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'INSERT OR REPLACE INTO admins (telegram_id, is_super_admin) VALUES (?, ?)',
+                (telegram_id, is_super_admin)
+            )
+            await db.commit()
+    
+    async def is_admin(self, telegram_id: int) -> bool:
+        """Проверить, является ли пользователь админом"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'SELECT 1 FROM admins WHERE telegram_id = ?',
+                (telegram_id,)
+            )
+            row = await cursor.fetchone()
+            return row is not None
