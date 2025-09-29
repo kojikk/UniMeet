@@ -53,18 +53,17 @@ async def exit_admin_mode(message: Message):
     
     set_admin_mode(message.from_user.id, False)
     
-    # Получаем статус пользователя для правильного меню
+    # Получаем состояние пользователя для правильного меню
     user = await db.get_user(message.from_user.id)
-    user_status = user['verification_status'] if user else None
+    from handlers.menu import determine_user_state, get_main_menu_keyboard
+    user_state = determine_user_state(user) if user else 'new'
     is_user_admin = is_admin(message)
-    
-    from handlers.menu import get_main_menu_keyboard
     
     await message.answer(
         "🚪 **Выход из админ-панели**\n\n"
         "Теперь ты видишь обычное пользовательское меню.\n"
         "Для входа в админку используй кнопку **Админ панель**.",
-        reply_markup=get_main_menu_keyboard(user_status, is_user_admin, admin_mode=False)
+        reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode=False)
     )
 
 @router.message(F.text == "📋 Заявки на верификацию")

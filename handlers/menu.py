@@ -1,6 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 
 from database import Database
 from config import DATABASE_URL
@@ -9,8 +10,26 @@ from utils import is_admin
 router = Router()
 db = Database(DATABASE_URL)
 
-def get_main_menu_keyboard(user_status: str = None, is_user_admin: bool = False, admin_mode: bool = False):
-    """Главное меню в зависимости от статуса пользователя"""
+def determine_user_state(user):
+    """Определить состояние пользователя на основе данных"""
+    if not user or not user.get('name'):
+        return 'new'  # Новый пользователь
+    
+    verification_status = user.get('verification_status', 'not_requested')
+    
+    if verification_status == 'not_requested':
+        return 'draft'  # Анкета создана, но не подана на верификацию
+    elif verification_status == 'pending':
+        return 'pending'  # На модерации
+    elif verification_status == 'approved':
+        return 'approved'  # Верифицирован
+    elif verification_status == 'rejected':
+        return 'rejected'  # Отклонен
+    else:
+        return 'new'  # Неизвестное состояние = новый
+
+def get_main_menu_keyboard(user_state: str = 'new', is_user_admin: bool = False, admin_mode: bool = False):
+    """Главное меню в зависимости от состояния пользователя"""
     keyboard = []
     
     if admin_mode:
@@ -21,41 +40,49 @@ def get_main_menu_keyboard(user_status: str = None, is_user_admin: bool = False,
             [KeyboardButton(text="📊 Статистика")],
             [KeyboardButton(text="🚪 Выйти из админки")]
         ]
+        
     else:
-        # Пользовательское меню в зависимости от статуса
-        if user_status == 'approved':
-            # Меню для верифицированных пользователей
+        # Пользовательское меню в зависимости от состояния
+        if user_state == 'new':
+            # Новый пользователь
+            keyboard = [
+                [KeyboardButton(text="🚀 Создать анкету")],
+                [KeyboardButton(text="ℹ️ О боте")]
+            ]
+            
+        elif user_state == 'draft':
+            # Анкета создана, но не подана на верификацию
             keyboard = [
                 [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
-                [KeyboardButton(text="🔍 Поиск людей"), KeyboardButton(text="🎉 Мероприятия")],
+                [KeyboardButton(text="📤 Подать на верификацию")]
             ]
-                
-        elif user_status == 'pending':
-            # Меню для пользователей на модерации
+            
+        elif user_state == 'pending':
+            # На модерации
             keyboard = [
                 [KeyboardButton(text="👤 Моя анкета")],
                 [KeyboardButton(text="ℹ️ Статус верификации")]
             ]
                 
-        elif user_status == 'rejected':
-            # Меню для пользователей с отклоненной заявкой
+        elif user_state == 'approved':
+            # Верифицирован - полный доступ
             keyboard = [
-                [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Изменить анкету")],
-                [KeyboardButton(text="📸 Повторная верификация")]
+                [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
+                [KeyboardButton(text="🔍 Поиск людей"), KeyboardButton(text="🎉 Мероприятия")],
             ]
                 
-        else:
-            # Меню для новых пользователей
+        elif user_state == 'rejected':
+            # Отклонен - нужны изменения
             keyboard = [
-                [KeyboardButton(text="🚀 Создать анкету")],
-                [KeyboardButton(text="ℹ️ О боте")]
+                [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
+                [KeyboardButton(text="📸 Повторная верификация")]
             ]
         
-        # Админская кнопка для всех админов независимо от статуса
+        # Админская кнопка для всех админов независимо от состояния
         if is_user_admin:
             keyboard.append([KeyboardButton(text="🔧 Админ панель")])
         
-        # Общие кнопки для всех
+        # Общие кнопки для всех (кроме админского режима)
         keyboard.append([KeyboardButton(text="❓ Помощь")])
     
     return ReplyKeyboardMarkup(
@@ -103,10 +130,10 @@ def get_inline_menu_keyboard(user_status: str = None, is_user_admin: bool = Fals
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 @router.message(F.text == "🚀 Создать анкету")
-async def create_profile_menu(message: Message):
+async def create_profile_menu(message: Message, state: FSMContext):
     """Создание анкеты через меню"""
     from handlers.registration import start_command
-    await start_command(message, None)
+    await start_command(message, state)
 
 @router.message(F.text == "👤 Моя анкета")
 async def view_profile_menu(message: Message):
@@ -115,11 +142,40 @@ async def view_profile_menu(message: Message):
     await view_profile(message)
 
 @router.message(F.text == "✏️ Редактировать")
-@router.message(F.text == "✏️ Изменить анкету")
-async def edit_profile_menu(message: Message):
-    """Редактирование анкеты через меню"""
+@router.message(F.text.in_(["✏️ Редактировать", "✏️ Изменить анкету"]))
+async def edit_profile_menu(message: Message, state: FSMContext):
+    """Редактирование анкеты через меню (унификация названий кнопок)"""
     from handlers.registration import edit_profile_command
-    await edit_profile_command(message, None)
+    await edit_profile_command(message, state)
+
+@router.message(F.text == "📤 Подать на верификацию")
+async def submit_for_verification_menu(message: Message):
+    """Подача анкеты на верификацию из состояния draft"""
+    user = await db.get_user(message.from_user.id)
+    
+    if not user or not user.get('name'):
+        await message.answer("❌ Сначала создай анкету!")
+        return
+        
+    if user.get('verification_status') != 'not_requested':
+        await message.answer("❌ Анкета уже подана на верификацию или обработана.")
+        return
+    
+    await message.answer(
+        "📸 **Верификация аккаунта**\n\n"
+        "Для подтверждения того, что ты студент, отправь фотографию "
+        "своего студенческого билета.\n\n"
+        "**Требования к фото:**\n"
+        "• Четкое изображение\n"
+        "• Видны основные данные\n"
+        "• Хорошее освещение\n\n"
+        "Отправь фото:"
+    )
+    
+    from handlers.states import VerificationStates
+    from aiogram.fsm.context import FSMContext
+    state = FSMContext.get_instance()
+    await state.set_state(VerificationStates.student_card_photo)
 
 # Админская панель теперь обрабатывается в handlers/admin_mode.py
 
@@ -204,17 +260,12 @@ async def status_menu(message: Message):
         await message.answer("❌ У тебя пока нет анкеты.")
         return
     
-    status_text = {
-        'not_requested': '🆕 Верификация не запрошена',
-        'pending': '⏳ На рассмотрении у администраторов',
-        'approved': '✅ Верификация пройдена',
-        'rejected': '❌ Заявка отклонена'
-    }
+    # Используем новую логику состояний
+    user_state = determine_user_state(user)
     
-    status = user['verification_status']
     await message.answer(
         f"ℹ️ **Статус верификации**\n\n"
-        f"Текущий статус: {status_text.get(status, 'Неизвестно')}\n\n"
+        f"Текущее состояние: {get_status_emoji(user_state)} {get_status_text(user_state)}\n\n"
         f"📅 Анкета создана: {user['created_at'][:10] if user['created_at'] else 'Неизвестно'}"
     )
 
@@ -241,7 +292,10 @@ async def help_menu(message: Message):
     user = await db.get_user(message.from_user.id)
     admin_text = "\n\n🔧 **Админские команды:**\n/admin_panel - панель администратора\n/pending - заявки на верификацию" if is_admin(message) else ""
     
-    if user and user['verification_status'] == 'approved':
+    # Используем новую логику состояний
+    user_state = determine_user_state(user) if user else 'new'
+    
+    if user_state == 'approved':
         await message.answer(
             "❓ **Помощь**\n\n"
             "**Доступные функции:**\n"
@@ -364,23 +418,83 @@ async def inline_status_callback(callback: CallbackQuery):
 async def show_menu_command(message: Message):
     """Показать меню"""
     user = await db.get_user(message.from_user.id)
-    status = user['verification_status'] if user else None
+    # Используем новую логику состояний
+    user_state = determine_user_state(user) if user else 'new'
     is_user_admin = is_admin(message)
+    from handlers.admin_mode import is_in_admin_mode
+    admin_mode = is_in_admin_mode(message.from_user.id)
     
     await message.answer(
         "📋 **Главное меню**\n\n"
         "Выбери действие из меню ниже или используй кнопки:",
-        reply_markup=get_main_menu_keyboard(status, is_user_admin)
+        reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
     )
 
-async def update_user_menu(message: Message, user_status: str):
-    """Обновить меню пользователя"""
+async def update_user_menu(message: Message, user_state: str, user_id: int = None):
+    """Обновить меню пользователя с правильным определением админа"""
     from handlers.admin_mode import is_in_admin_mode
     
-    is_user_admin = is_admin(message)
-    admin_mode = is_in_admin_mode(message.from_user.id)
+    # Если user_id не передан, используем из message
+    actual_user_id = user_id if user_id else message.from_user.id
+    
+    # Для проверки админа создаем правильный объект
+    class FakeMessage:
+        def __init__(self, from_user_data):
+            self.from_user = from_user_data
+    
+    # Получаем данные пользователя из Telegram для проверки админа
+    from aiogram import Bot
+    bot = Bot.get_current()
+    try:
+        user_info = await bot.get_chat(actual_user_id)
+        fake_message = FakeMessage(user_info)
+        is_user_admin = is_admin(fake_message)
+    except Exception:
+        # Если не удалось получить данные, используем исходную логику
+        is_user_admin = is_admin(message)
+    
+    admin_mode = is_in_admin_mode(actual_user_id)
+    
+    # Логируем для отладки
+    print(f"🔍 DEBUG update_user_menu:")
+    print(f"   user_id: {message.from_user.id}")
+    print(f"   username: {message.from_user.username}")
+    print(f"   user_state: {user_state}")
+    print(f"   is_admin: {is_user_admin}")
+    print(f"   admin_mode: {admin_mode}")
+    
+    # Дополнительная диагностика админского статуса
+    from config import ADMIN_IDS, ADMIN_USERNAMES
+    print(f"   ADMIN_IDS: {ADMIN_IDS}")
+    print(f"   ADMIN_USERNAMES: {ADMIN_USERNAMES}")
+    print(f"   user_id in ADMIN_IDS: {message.from_user.id in ADMIN_IDS}")
+    username_lower = message.from_user.username.lower() if message.from_user.username else None
+    print(f"   username_lower: {username_lower}")
+    print(f"   username in ADMIN_USERNAMES: {username_lower and username_lower in ADMIN_USERNAMES}")
     
     await message.answer(
         "📋 Меню обновлено!",
-        reply_markup=get_main_menu_keyboard(user_status, is_user_admin, admin_mode)
+        reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
     )
+
+def get_status_emoji(user_state: str) -> str:
+    """Получить эмодзи для состояния пользователя"""
+    status_emojis = {
+        'new': '⚫',  # Новый
+        'draft': '⚪',  # Черновик
+        'pending': '🟡',  # На модерации
+        'approved': '🟢',  # Верифицирован
+        'rejected': '🔴'  # Отклонен
+    }
+    return status_emojis.get(user_state, '⚪')
+
+def get_status_text(user_state: str) -> str:
+    """Получить текст для состояния пользователя"""
+    status_texts = {
+        'new': 'Анкета не создана',
+        'draft': 'Черновик (не подана на верификацию)', 
+        'pending': 'На модерации',
+        'approved': 'Верифицирована ✅',
+        'rejected': 'Требует изменений'
+    }
+    return status_texts.get(user_state, 'Неизвестное состояние')

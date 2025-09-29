@@ -244,9 +244,18 @@ async def verify_approve_callback(callback: CallbackQuery, bot: Bot):
         from handlers.menu import get_main_menu_keyboard
         from utils import get_user_display_name
         
-        # Проверяем, является ли пользователь админом
+        # Проверяем, является ли пользователь админом (проверяем и ID и username)
         user_telegram_id = verification['telegram_id']
-        user_is_admin = user_telegram_id in ADMIN_IDS
+        from config import ADMIN_IDS, ADMIN_USERNAMES
+        
+        # Получаем информацию о пользователе для проверки username
+        try:
+            user_info = await bot.get_chat(user_telegram_id)
+            username = user_info.username.lower() if user_info.username else None
+        except:
+            username = None
+            
+        user_is_admin = (user_telegram_id in ADMIN_IDS) or (username and username in ADMIN_USERNAMES)
         
         await bot.send_message(
             chat_id=user_telegram_id,
@@ -256,7 +265,7 @@ async def verify_approve_callback(callback: CallbackQuery, bot: Bot):
                  "• 🔍 Искать новых друзей (скоро)\n"
                  "• 🎉 Участвовать в мероприятиях (скоро)\n\n"
                  "Используй обновленное меню ниже!",
-            reply_markup=get_main_menu_keyboard('approved', user_is_admin)
+            reply_markup=get_main_menu_keyboard('approved', user_is_admin, admin_mode=False)
         )
     except Exception as e:
         logger.error(f"Не удалось отправить уведомление пользователю {verification['telegram_id']}: {e}")
@@ -293,9 +302,18 @@ async def verify_reject_callback(callback: CallbackQuery, bot: Bot):
     try:
         from handlers.menu import get_main_menu_keyboard
         
-        # Проверяем, является ли пользователь админом
+        # Проверяем, является ли пользователь админом (проверяем и ID и username)
         user_telegram_id = verification['telegram_id']
-        user_is_admin = user_telegram_id in ADMIN_IDS
+        from config import ADMIN_IDS, ADMIN_USERNAMES
+        
+        # Получаем информацию о пользователе для проверки username
+        try:
+            user_info = await bot.get_chat(user_telegram_id)
+            username = user_info.username.lower() if user_info.username else None
+        except:
+            username = None
+            
+        user_is_admin = (user_telegram_id in ADMIN_IDS) or (username and username in ADMIN_USERNAMES)
         
         await bot.send_message(
             chat_id=user_telegram_id,
@@ -308,7 +326,7 @@ async def verify_reject_callback(callback: CallbackQuery, bot: Bot):
                  "• ✏️ Изменить анкету\n"
                  "• 📸 Отправить новое фото студбилета\n\n"
                  "Используй кнопки меню ниже:",
-            reply_markup=get_main_menu_keyboard('rejected', user_is_admin)
+            reply_markup=get_main_menu_keyboard('rejected', user_is_admin, admin_mode=False)
         )
     except Exception as e:
         logger.error(f"Не удалось отправить уведомление пользователю {verification['telegram_id']}: {e}")

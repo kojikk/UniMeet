@@ -56,7 +56,12 @@ async def start_command(message: Message, state: FSMContext):
     is_user_admin = is_admin(message)
     admin_mode = is_in_admin_mode(message.from_user.id)
     
-    if user and user['verification_status'] == 'approved':
+    # Определяем состояние пользователя
+    from handlers.menu import determine_user_state
+    user_state = determine_user_state(user)
+    
+    # Генерируем соответствующий ответ
+    if user_state == 'approved':
         await message.answer(
             "🎉 **Добро пожаловать в UniMeetingBot!**\n\n"
             "Ты уже зарегистрирован и верифицирован!\n\n"
@@ -65,60 +70,55 @@ async def start_command(message: Message, state: FSMContext):
             "• 🔍 Поиск новых знакомств\n"
             "• 🎉 Участие в мероприятиях\n\n"
             "Используй меню ниже для навигации:",
-            reply_markup=get_main_menu_keyboard('approved', is_user_admin, admin_mode)
+            reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
         )
         return
     
-    if user and user['verification_status'] == 'pending':
+    elif user_state == 'draft':
+        await message.answer(
+            "📝 **Твоя анкета готова!**\n\n"
+            "Анкета создана, но ещё не подана на верификацию.\n\n"
+            "**Что можно делать:**\n"
+            "• 👤 Просмотреть анкету\n"
+            "• ✏️ Внести изменения\n"
+            "• 📤 Подать на верификацию\n\n"
+            "После верификации получишь полный доступ:",
+            reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
+        )
+        return
+    
+    elif user_state == 'pending':
         await message.answer(
             "⏳ **Анкета на модерации**\n\n"
             "Твоя анкета отправлена администраторам на проверку.\n"
             "Ожидай подтверждения!\n\n"
             "После одобрения получишь доступ ко всем функциям:",
-            reply_markup=get_main_menu_keyboard('pending', is_user_admin, admin_mode)
+            reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
         )
         return
     
-    if user and user['verification_status'] == 'rejected':
+    elif user_state == 'rejected':
         await message.answer(
             "❌ **Заявка отклонена**\n\n"
             "К сожалению, твоя предыдущая заявка была отклонена.\n\n"
             "**Что можно сделать:**\n"
-            "• Изменить данные анкеты\n"
-            "• Отправить новое фото студбилета\n"
-            "• Создать анкету заново\n\n"
+            "• ✏️ Изменить данные анкеты\n"
+            "• 📸 Отправить новое фото студбилета\n\n"
             "Используй кнопки ниже:",
-            reply_markup=get_main_menu_keyboard('rejected', is_user_admin, admin_mode)
+            reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode)
         )
         return
     
-    # Новый пользователь - показываем регистрацию
-    if state is None:
-        # Если вызвано из меню без state
-        await message.answer(
-            "🎓 **Добро пожаловать в UniMeetingBot!**\n\n"
-            "Этот бот поможет тебе найти новых друзей среди студентов.\n\n"
-            "**Начнем создание анкеты!** 🚀\n"
-            "Сначала выбери свой курс:",
-            reply_markup=get_course_keyboard()
-        )
-        # Обновляем меню
-        from aiogram import Bot
-        bot = Bot.get_current()
-        await bot.send_message(
-            chat_id=message.from_user.id,
-            text="📋 Установлено меню для новых пользователей:",
-            reply_markup=get_main_menu_keyboard(None, is_user_admin, admin_mode)
-        )
-    else:
-        await message.answer(
-            "🎓 **Привет! Добро пожаловать в UniMeetingBot!**\n\n"
-            "Этот бот поможет тебе найти новых друзей среди студентов.\n"
-            "Давай создадим твою анкету! 🚀\n\n"
-            "Сначала выбери свой курс:",
-            reply_markup=get_course_keyboard()
-        )
-        await state.set_state(RegistrationStates.course)
+    # Новый пользователь (user_state == 'new')
+    # Начинаем создание анкеты сразу
+    await message.answer(
+        "🎓 **Привет! Добро пожаловать в UniMeetingBot!**\n\n"
+        "Этот бот поможет тебе найти новых друзей среди студентов.\n"
+        "Давай создадим твою анкету! 🚀\n\n"
+        "Сначала выбери свой курс:",
+        reply_markup=get_course_keyboard()
+    )
+    await state.set_state(RegistrationStates.course)
     
     # Создаем пользователя, если его нет
     if not user:
@@ -246,7 +246,11 @@ async def save_profile(callback: CallbackQuery, state: FSMContext):
         photo_file_id=user_data['photo_file_id']
     )
     
-    # Проверяем, нужна ли верификация
+    # Проверяем состояние пользователя для принятия решения о верификации
+    from handlers.menu import determine_user_state
+    user_updated = await db.get_user(callback.from_user.id)  # Получаем обновленные данные
+    new_state = determine_user_state(user_updated)
+    
     if current_status == 'approved':
         # Пользователь уже верифицирован - не запрашиваем повторную верификацию
         await callback.message.edit_caption(
@@ -254,26 +258,34 @@ async def save_profile(callback: CallbackQuery, state: FSMContext):
             "Изменения сохранены. Повторная верификация не требуется.\n\n"
             "Можешь продолжать пользоваться всеми функциями бота!"
         )
-        
-        # Обновляем меню для верифицированного пользователя
-        from handlers.menu import update_user_menu
-        await update_user_menu(callback.message, 'approved')
-        
+        # Меню НЕ обновляем - оно остается таким же (approved)
         await state.clear()
-        
-    else:
-        # Новый пользователь или с отклоненной заявкой - требуется верификация
+
+    elif current_status == 'not_requested' and user and user.get('name') is None:
+        # Это первое создание анкеты (new -> draft) - обновляем меню
         await callback.message.edit_caption(
-            caption="✅ Анкета сохранена!\n\n"
-            "🔍 Теперь тебе нужно пройти верификацию.\n"
-            "Отправь фото со своим студенческим билетом:"
+            caption="✅ **Анкета сохранена!**\n\n"
+            "Твоя анкета сохранена как черновик.\n\n"
+            "**Что дальше:**\n"
+            "• Можешь ещё раз просмотреть и отредактировать\n"
+            "• Когда будешь готов - подай на верификацию\n\n"
+            "Используй кнопки меню:"
         )
-        
-        # Обновляем меню пользователя
+
+        # Обновляем меню только при первом создании (new -> draft)
         from handlers.menu import update_user_menu
-        await update_user_menu(callback.message, 'pending')
-        
-        await state.set_state(VerificationStates.student_card_photo)
+        await update_user_menu(callback.message, new_state, callback.from_user.id)
+        await state.clear()
+
+    else:
+        # Редактирование существующей анкеты - меню НЕ меняется
+        await callback.message.edit_caption(
+            caption="✅ **Анкета обновлена!**\n\n"
+            "Изменения сохранены.\n\n"
+            "Можешь продолжать пользоваться ботом!"
+        )
+        # Меню НЕ обновляем - оно остается таким же
+        await state.clear()
 
 @router.callback_query(F.data == "edit_profile")
 async def edit_profile_start(callback: CallbackQuery, state: FSMContext):
@@ -360,7 +372,7 @@ def get_rejected_user_menu():
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 @router.message(Command("edit"))
-async def edit_profile_command(message: Message, state: FSMContext):
+async def edit_profile_command(message: Message, state: FSMContext = None):
     """Команда редактирования анкеты"""
     user = await db.get_user(message.from_user.id)
     
@@ -382,6 +394,28 @@ async def edit_profile_command(message: Message, state: FSMContext):
             reply_markup=get_rejected_user_menu()
         )
         return
+    
+    # Если state не передан (вызов из меню), получаем его из контекста
+    if state is None:
+        from aiogram.fsm.context import FSMContext
+        from aiogram import Bot
+        bot = Bot.get_current()
+        from aiogram.fsm.storage.base import StorageKey
+        
+        # Получаем storage из dispatcher
+        try:
+            dispatcher = bot.dispatcher if hasattr(bot, 'dispatcher') else None
+            storage = dispatcher.storage if dispatcher else None
+            
+            if storage:
+                key = StorageKey(bot.id, message.from_user.id, message.from_user.id)
+                state = FSMContext(storage, key)
+            else:
+                await message.answer("❌ Техническая ошибка. Попробуй команду /edit")
+                return
+        except Exception as e:
+            await message.answer("❌ Техническая ошибка. Попробуй команду /edit")
+            return
     
     await message.answer(
         "✏️ Давай обновим твою анкету!\n\n"
