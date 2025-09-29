@@ -50,7 +50,7 @@ def format_profile(user_data: dict) -> str:
 async def start_command(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     from handlers.menu import get_main_menu_keyboard
-    from handlers.admin_mode import is_in_admin_mode
+    from handlers.admin import is_in_admin_mode
     
     user = await db.get_user(message.from_user.id)
     is_user_admin = is_admin(message)

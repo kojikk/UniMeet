@@ -421,7 +421,7 @@ async def show_menu_command(message: Message):
     # Используем новую логику состояний
     user_state = determine_user_state(user) if user else 'new'
     is_user_admin = is_admin(message)
-    from handlers.admin_mode import is_in_admin_mode
+    from handlers.admin import is_in_admin_mode
     admin_mode = is_in_admin_mode(message.from_user.id)
     
     await message.answer(
@@ -432,7 +432,7 @@ async def show_menu_command(message: Message):
 
 async def update_user_menu(message: Message, user_state: str, user_id: int = None):
     """Обновить меню пользователя с правильным определением админа"""
-    from handlers.admin_mode import is_in_admin_mode
+    from handlers.admin import is_in_admin_mode
     
     # Если user_id не передан, используем из message
     actual_user_id = user_id if user_id else message.from_user.id
