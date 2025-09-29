@@ -9,52 +9,54 @@ from utils import is_admin
 router = Router()
 db = Database(DATABASE_URL)
 
-def get_main_menu_keyboard(user_status: str = None, is_user_admin: bool = False):
+def get_main_menu_keyboard(user_status: str = None, is_user_admin: bool = False, admin_mode: bool = False):
     """Главное меню в зависимости от статуса пользователя"""
     keyboard = []
     
-    if user_status == 'approved':
-        # Меню для верифицированных пользователей
+    if admin_mode:
+        # Админское меню
         keyboard = [
-            [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
-            [KeyboardButton(text="🔍 Поиск людей"), KeyboardButton(text="🎉 Мероприятия")],
+            [KeyboardButton(text="📋 Заявки на верификацию")],
+            [KeyboardButton(text="🎉 Управление мероприятиями")],
+            [KeyboardButton(text="📊 Статистика")],
+            [KeyboardButton(text="🚪 Выйти из админки")]
         ]
-        
-        if is_user_admin:
-            keyboard.append([KeyboardButton(text="🔧 Админ панель")])
-            
-    elif user_status == 'pending':
-        # Меню для пользователей на модерации
-        keyboard = [
-            [KeyboardButton(text="👤 Моя анкета")],
-            [KeyboardButton(text="ℹ️ Статус верификации")]
-        ]
-        
-        if is_user_admin:
-            keyboard.append([KeyboardButton(text="🔧 Админ панель")])
-            
-    elif user_status == 'rejected':
-        # Меню для пользователей с отклоненной заявкой
-        keyboard = [
-            [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Изменить анкету")],
-            [KeyboardButton(text="📸 Повторная верификация")]
-        ]
-        
-        if is_user_admin:
-            keyboard.append([KeyboardButton(text="🔧 Админ панель")])
-            
     else:
-        # Меню для новых пользователей
-        keyboard = [
-            [KeyboardButton(text="🚀 Создать анкету")],
-            [KeyboardButton(text="ℹ️ О боте")]
-        ]
+        # Пользовательское меню в зависимости от статуса
+        if user_status == 'approved':
+            # Меню для верифицированных пользователей
+            keyboard = [
+                [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
+                [KeyboardButton(text="🔍 Поиск людей"), KeyboardButton(text="🎉 Мероприятия")],
+            ]
+                
+        elif user_status == 'pending':
+            # Меню для пользователей на модерации
+            keyboard = [
+                [KeyboardButton(text="👤 Моя анкета")],
+                [KeyboardButton(text="ℹ️ Статус верификации")]
+            ]
+                
+        elif user_status == 'rejected':
+            # Меню для пользователей с отклоненной заявкой
+            keyboard = [
+                [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Изменить анкету")],
+                [KeyboardButton(text="📸 Повторная верификация")]
+            ]
+                
+        else:
+            # Меню для новых пользователей
+            keyboard = [
+                [KeyboardButton(text="🚀 Создать анкету")],
+                [KeyboardButton(text="ℹ️ О боте")]
+            ]
         
+        # Админская кнопка для всех админов независимо от статуса
         if is_user_admin:
             keyboard.append([KeyboardButton(text="🔧 Админ панель")])
-    
-    # Общие кнопки для всех
-    keyboard.append([KeyboardButton(text="❓ Помощь")])
+        
+        # Общие кнопки для всех
+        keyboard.append([KeyboardButton(text="❓ Помощь")])
     
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -119,15 +121,7 @@ async def edit_profile_menu(message: Message):
     from handlers.registration import edit_profile_command
     await edit_profile_command(message, None)
 
-@router.message(F.text == "🔧 Админ панель")
-async def admin_panel_menu(message: Message):
-    """Админ панель через меню"""
-    if not is_admin(message):
-        await message.answer("❌ У вас нет прав администратора.")
-        return
-    
-    from handlers.admin import admin_panel_command
-    await admin_panel_command(message)
+# Админская панель теперь обрабатывается в handlers/admin_mode.py
 
 @router.message(F.text == "🔍 Поиск людей")
 async def search_people_menu(message: Message):
@@ -381,9 +375,12 @@ async def show_menu_command(message: Message):
 
 async def update_user_menu(message: Message, user_status: str):
     """Обновить меню пользователя"""
+    from handlers.admin_mode import is_in_admin_mode
+    
     is_user_admin = is_admin(message)
+    admin_mode = is_in_admin_mode(message.from_user.id)
     
     await message.answer(
         "📋 Меню обновлено!",
-        reply_markup=get_main_menu_keyboard(user_status, is_user_admin)
+        reply_markup=get_main_menu_keyboard(user_status, is_user_admin, admin_mode)
     )

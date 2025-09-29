@@ -50,9 +50,11 @@ def format_profile(user_data: dict) -> str:
 async def start_command(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     from handlers.menu import get_main_menu_keyboard
+    from handlers.admin_mode import is_in_admin_mode
     
     user = await db.get_user(message.from_user.id)
     is_user_admin = is_admin(message)
+    admin_mode = is_in_admin_mode(message.from_user.id)
     
     if user and user['verification_status'] == 'approved':
         await message.answer(
@@ -60,10 +62,10 @@ async def start_command(message: Message, state: FSMContext):
             "Ты уже зарегистрирован и верифицирован!\n\n"
             "**Доступные функции:**\n"
             "• 👤 Просмотр и редактирование анкеты\n"
-            "• 🔍 Поиск новых знакомств (скоро)\n"
-            "• 🎉 Участие в мероприятиях (скоро)\n\n"
+            "• 🔍 Поиск новых знакомств\n"
+            "• 🎉 Участие в мероприятиях\n\n"
             "Используй меню ниже для навигации:",
-            reply_markup=get_main_menu_keyboard('approved', is_user_admin)
+            reply_markup=get_main_menu_keyboard('approved', is_user_admin, admin_mode)
         )
         return
     
@@ -73,7 +75,7 @@ async def start_command(message: Message, state: FSMContext):
             "Твоя анкета отправлена администраторам на проверку.\n"
             "Ожидай подтверждения!\n\n"
             "После одобрения получишь доступ ко всем функциям:",
-            reply_markup=get_main_menu_keyboard('pending', is_user_admin)
+            reply_markup=get_main_menu_keyboard('pending', is_user_admin, admin_mode)
         )
         return
     
@@ -86,7 +88,7 @@ async def start_command(message: Message, state: FSMContext):
             "• Отправить новое фото студбилета\n"
             "• Создать анкету заново\n\n"
             "Используй кнопки ниже:",
-            reply_markup=get_main_menu_keyboard('rejected', is_user_admin)
+            reply_markup=get_main_menu_keyboard('rejected', is_user_admin, admin_mode)
         )
         return
     
@@ -106,7 +108,7 @@ async def start_command(message: Message, state: FSMContext):
         await bot.send_message(
             chat_id=message.from_user.id,
             text="📋 Установлено меню для новых пользователей:",
-            reply_markup=get_main_menu_keyboard(None, is_user_admin)
+            reply_markup=get_main_menu_keyboard(None, is_user_admin, admin_mode)
         )
     else:
         await message.answer(

@@ -9,6 +9,7 @@ from handlers.registration import router as registration_router
 from handlers.admin import router as admin_router
 from handlers.menu import router as menu_router
 from handlers.events import router as events_router
+from handlers.admin_mode import router as admin_mode_router
 
 # Настройка логирования
 log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -33,7 +34,8 @@ async def main():
         await db.add_admin(admin_id, is_super_admin=True)
     
     # Регистрация роутеров
-    dp.include_router(menu_router)  # Меню должно быть первым
+    dp.include_router(admin_mode_router)  # Админский режим должен быть первым
+    dp.include_router(menu_router)  # Меню
     dp.include_router(events_router)  # Мероприятия
     dp.include_router(registration_router)
     dp.include_router(admin_router)
