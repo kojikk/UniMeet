@@ -42,6 +42,41 @@ async def migrate_database():
                     )
                 ''')
             
+            # Проверяем, существует ли таблица events
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
+            events_table_exists = await cursor.fetchone()
+            
+            if not events_table_exists:
+                print("➕ Создаю таблицу events...")
+                await db.execute('''
+                    CREATE TABLE events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_by INTEGER NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (created_by) REFERENCES admins (telegram_id)
+                    )
+                ''')
+            
+            # Проверяем, существует ли таблица user_events
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_events'")
+            user_events_table_exists = await cursor.fetchone()
+            
+            if not user_events_table_exists:
+                print("➕ Создаю таблицу user_events...")
+                await db.execute('''
+                    CREATE TABLE user_events (
+                        user_id INTEGER NOT NULL,
+                        event_id INTEGER NOT NULL,
+                        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (user_id, event_id),
+                        FOREIGN KEY (user_id) REFERENCES users (id),
+                        FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE
+                    )
+                ''')
+            
             await db.commit()
             print("✅ Миграция завершена успешно!")
             

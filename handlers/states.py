@@ -13,3 +13,10 @@ class RegistrationStates(StatesGroup):
 class VerificationStates(StatesGroup):
     """Состояния для верификации"""
     student_card_photo = State()
+
+class EventStates(StatesGroup):
+    """Состояния для создания/редактирования мероприятий"""
+    name = State()
+    description = State()
+    edit_name = State()
+    edit_description = State()

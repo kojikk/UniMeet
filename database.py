@@ -50,6 +50,31 @@ class Database:
                 )
             ''')
             
+            # Таблица мероприятий
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_by INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (created_by) REFERENCES admins (telegram_id)
+                )
+            ''')
+            
+            # Таблица участников мероприятий
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS user_events (
+                    user_id INTEGER NOT NULL,
+                    event_id INTEGER NOT NULL,
+                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, event_id),
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE
+                )
+            ''')
+            
             await db.commit()
             logging.info("База данных инициализирована")
     
@@ -188,3 +213,123 @@ class Database:
             )
             row = await cursor.fetchone()
             return row is not None
+    
+    # === МЕТОДЫ ДЛЯ РАБОТЫ С МЕРОПРИЯТИЯМИ ===
+    
+    async def create_event(self, name: str, description: str, created_by: int) -> int:
+        """Создать мероприятие"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'INSERT INTO events (name, description, created_by) VALUES (?, ?, ?)',
+                (name, description, created_by)
+            )
+            await db.commit()
+            return cursor.lastrowid
+    
+    async def get_active_events(self) -> List[Dict[str, Any]]:
+        """Получить список активных мероприятий"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT * FROM events WHERE is_active = TRUE ORDER BY created_at DESC'
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    
+    async def get_all_events(self) -> List[Dict[str, Any]]:
+        """Получить все мероприятия (для админов)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT e.*, COUNT(ue.user_id) as participant_count '
+                'FROM events e '
+                'LEFT JOIN user_events ue ON e.id = ue.event_id '
+                'GROUP BY e.id '
+                'ORDER BY e.created_at DESC'
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    
+    async def get_event_by_id(self, event_id: int) -> Optional[Dict[str, Any]]:
+        """Получить мероприятие по ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT e.*, COUNT(ue.user_id) as participant_count '
+                'FROM events e '
+                'LEFT JOIN user_events ue ON e.id = ue.event_id '
+                'WHERE e.id = ? '
+                'GROUP BY e.id',
+                (event_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+    
+    async def update_event(self, event_id: int, **kwargs):
+        """Обновить мероприятие"""
+        if not kwargs:
+            return
+        
+        set_clause = ', '.join(f'{key} = ?' for key in kwargs.keys())
+        values = list(kwargs.values()) + [event_id]
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f'UPDATE events SET {set_clause} WHERE id = ?',
+                values
+            )
+            await db.commit()
+    
+    async def join_event(self, user_id: int, event_id: int):
+        """Записаться на мероприятие"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'INSERT OR IGNORE INTO user_events (user_id, event_id) VALUES (?, ?)',
+                (user_id, event_id)
+            )
+            await db.commit()
+    
+    async def leave_event(self, user_id: int, event_id: int):
+        """Отписаться от мероприятия"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'DELETE FROM user_events WHERE user_id = ? AND event_id = ?',
+                (user_id, event_id)
+            )
+            await db.commit()
+    
+    async def is_user_joined_event(self, user_id: int, event_id: int) -> bool:
+        """Проверить, записан ли пользователь на мероприятие"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'SELECT 1 FROM user_events WHERE user_id = ? AND event_id = ?',
+                (user_id, event_id)
+            )
+            row = await cursor.fetchone()
+            return row is not None
+    
+    async def get_user_events(self, user_id: int) -> List[Dict[str, Any]]:
+        """Получить мероприятия пользователя"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT e.*, ue.joined_at FROM events e '
+                'JOIN user_events ue ON e.id = ue.event_id '
+                'WHERE ue.user_id = ? AND e.is_active = TRUE '
+                'ORDER BY ue.joined_at DESC',
+                (user_id,)
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    
+    async def get_user_events_count(self, user_id: int) -> int:
+        """Получить количество мероприятий пользователя"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'SELECT COUNT(*) FROM user_events ue '
+                'JOIN events e ON ue.event_id = e.id '
+                'WHERE ue.user_id = ? AND e.is_active = TRUE',
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
