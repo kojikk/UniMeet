@@ -10,6 +10,7 @@ from handlers.admin import router as admin_router
 from handlers.menu import router as menu_router
 from handlers.events import router as events_router
 # admin_mode_router объединен с admin_router
+# state_manager.py используется внутри других handlers
 
 # Настройка логирования
 log_level = logging.DEBUG if DEBUG else logging.INFO

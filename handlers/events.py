@@ -134,15 +134,17 @@ def format_event_info(event, participant_count=None):
 @router.message(Command("events"))
 async def events_list_command(message: Message):
     """Список мероприятий"""
+    from handlers.menu import edit_or_send_message
     user = await db.get_user(message.from_user.id)
     
     if not user or user['verification_status'] != 'approved':
-        await message.answer("❌ Эта функция доступна только верифицированным пользователям.")
+        await edit_or_send_message(message, "❌ Эта функция доступна только верифицированным пользователям.")
         return
     
     events = await db.get_active_events()
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         f"🎉 **Мероприятия ({len(events)})**\n\n"
         "Выбери мероприятие для подробной информации:",
         reply_markup=get_events_list_keyboard(events, user['id'])
@@ -151,16 +153,18 @@ async def events_list_command(message: Message):
 @router.message(Command("my_events"))
 async def my_events_command(message: Message):
     """Мои мероприятия"""
+    from handlers.menu import edit_or_send_message
     user = await db.get_user(message.from_user.id)
     
     if not user or user['verification_status'] != 'approved':
-        await message.answer("❌ Эта функция доступна только верифицированным пользователям.")
+        await edit_or_send_message(message, "❌ Эта функция доступна только верифицированным пользователям.")
         return
     
     my_events = await db.get_user_events(user['id'])
     
     if not my_events:
-        await message.answer(
+        await edit_or_send_message(
+            message,
             "📭 **У тебя пока нет мероприятий**\n\n"
             "Используй /events чтобы найти интересные события!"
         )
@@ -171,7 +175,8 @@ async def my_events_command(message: Message):
         joined_date = event['joined_at'][:10] if event['joined_at'] else "Неизвестно"
         events_text.append(f"🎉 **{event['name']}**\n📅 Записался: {joined_date}")
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         f"🎉 **Твои мероприятия ({len(my_events)})**\n\n" + 
         "\n\n".join(events_text)
     )
@@ -287,13 +292,17 @@ async def no_events_callback(callback: CallbackQuery):
 @router.message(Command("events_admin"))
 async def admin_events_command(message: Message):
     """Админское управление мероприятиями"""
+    # Импортируем функцию для правильного управления сообщениями
+    from handlers.menu import edit_or_send_message
+    
     if not is_admin(message):
-        await message.answer("❌ У вас нет прав администратора.")
+        await edit_or_send_message(message, "❌ У вас нет прав администратора.")
         return
     
     events = await db.get_all_events()
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         f"🔧 **Управление мероприятиями ({len(events)})**\n\n"
         "Выберите действие:",
         reply_markup=get_admin_events_keyboard(events)
@@ -322,8 +331,23 @@ async def admin_event_create_callback(callback: CallbackQuery, state: FSMContext
         await callback.answer("❌ У вас нет прав администратора.", show_alert=True)
         return
     
+    # Очищаем предыдущие FSM состояния (админ режим должен остаться)
+    try:
+        bot = callback.bot
+        dispatcher = getattr(bot, 'dispatcher', None)
+        if dispatcher and hasattr(dispatcher, 'storage'):
+            storage = dispatcher.storage
+            from aiogram.fsm.storage.base import StorageKey
+            key = StorageKey(bot.id, callback.from_user.id, callback.from_user.id)
+            
+            await storage.set_state(key, None)
+            await storage.set_data(key, {})
+    except Exception:
+        pass
+    
     await callback.message.edit_text(
         "➕ **Создание мероприятия**\n\n"
+        "Все предыдущие операции сброшены.\n"
         "Введите название мероприятия (до 100 символов):"
     )
     await state.set_state(EventStates.name)

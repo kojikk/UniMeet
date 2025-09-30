@@ -93,42 +93,58 @@ def format_profile_for_admin(verification):
 # === РЕЖИМ ПЕРЕКЛЮЧЕНИЯ (из admin_mode.py) ===
 
 @router.message(F.text == "🔧 Админ панель")
-async def enter_admin_mode(message: Message):
-    """Войти в админский режим"""
+async def enter_admin_mode_handler(message: Message):
+    """Войти в админский режим с очисткой всех других состояний"""
     if not is_admin(message):
-        await message.answer("❌ У вас нет прав администратора.")
+        # Импортируем функцию замещения сообщений
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ У вас нет прав администратора.")
         return
     
-    set_admin_mode(message.from_user.id, True)
+    # Используем менеджер состояний для безопасного входа
+    from handlers.state_manager import enter_admin_mode
     
-    from handlers.menu import get_main_menu_keyboard
+    # В обработчиках aiogram 3.x можно получить бота из message.bot
+    bot = message.bot
+    await enter_admin_mode(message.from_user.id, bot)
     
-    await message.answer(
-        "🔧 **Добро пожаловать в админ-панель!**\n\n"
-        "Теперь ты видишь админское меню.\n"
+    from handlers.menu import get_main_menu_keyboard, edit_or_send_message
+    
+    await edit_or_send_message(
+        message,
+        "🔧 **Админ-панель активирована!**\n\n"
+        "Все предыдущие операции сброшены.\n"
+        "Теперь ты видишь только админское меню.\n"
         "Для выхода используй кнопку **Выйти из админки**.",
         reply_markup=get_main_menu_keyboard(admin_mode=True)
     )
 
 @router.message(F.text == "🚪 Выйти из админки")
-async def exit_admin_mode(message: Message):
-    """Выйти из админского режима"""
+async def exit_admin_mode_handler(message: Message):
+    """Выйти из админского режима с очисткой состояний"""
     if not is_admin(message):
-        await message.answer("❌ У вас нет прав администратора.")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ У вас нет прав администратора.")
         return
     
-    set_admin_mode(message.from_user.id, False)
+    # Используем менеджер состояний для безопасного выхода
+    from handlers.state_manager import exit_admin_mode
+    
+    # В обработчиках aiogram 3.x можно получить бота из message.bot
+    bot = message.bot
+    await exit_admin_mode(message.from_user.id, bot)
     
     # Получаем состояние пользователя для правильного меню
     user = await db.get_user(message.from_user.id)
-    from handlers.menu import determine_user_state, get_main_menu_keyboard
+    from handlers.menu import determine_user_state, get_main_menu_keyboard, edit_or_send_message
     user_state = determine_user_state(user) if user else 'new'
     is_user_admin = is_admin(message)
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         "🚪 **Выход из админ-панели**\n\n"
-        "Теперь ты видишь обычное пользовательское меню.\n"
-        "Для входа в админку используй кнопку **Админ панель**.",
+        "Все админские операции сброшены.\n"
+        "Теперь ты видишь обычное пользовательское меню.",
         reply_markup=get_main_menu_keyboard(user_state, is_user_admin, admin_mode=False)
     )
 
@@ -138,7 +154,8 @@ async def exit_admin_mode(message: Message):
 async def admin_pending_menu(message: Message):
     """Заявки на верификацию через админское меню"""
     if not is_admin(message) or not is_in_admin_mode(message.from_user.id):
-        await message.answer("❌ Доступно только в админском режиме.")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ Доступно только в админском режиме.")
         return
     
     await pending_command(message)
@@ -147,7 +164,8 @@ async def admin_pending_menu(message: Message):
 async def admin_events_menu(message: Message):
     """Управление мероприятиями через админское меню"""
     if not is_admin(message) or not is_in_admin_mode(message.from_user.id):
-        await message.answer("❌ Доступно только в админском режиме.")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ Доступно только в админском режиме.")
         return
     
     from handlers.events import admin_events_command
@@ -157,7 +175,8 @@ async def admin_events_menu(message: Message):
 async def admin_stats_menu(message: Message):
     """Статистика через админское меню"""
     if not is_admin(message) or not is_in_admin_mode(message.from_user.id):
-        await message.answer("❌ Доступно только в админском режиме.")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ Доступно только в админском режиме.")
         return
     
     # Получаем статистику
@@ -165,7 +184,9 @@ async def admin_stats_menu(message: Message):
     events_count = await get_events_stats()
     pending_count = len(await db.get_pending_verifications())
     
-    await message.answer(
+    from handlers.menu import edit_or_send_message
+    await edit_or_send_message(
+        message,
         f"📊 **Статистика системы**\n\n"
         f"👥 **Пользователи:**\n"
         f"• Всего: {users_count['total']}\n"
@@ -230,17 +251,20 @@ Database._connect = _connect
 async def pending_command(message: Message):
     """Список заявок на верификацию"""
     if not is_admin(message):
-        await message.answer("❌ У вас нет прав администратора.")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "❌ У вас нет прав администратора.")
         return
     
     verifications = await db.get_pending_verifications()
     
     if not verifications:
-        await message.answer("✅ Нет заявок на рассмотрении!")
+        from handlers.menu import edit_or_send_message
+        await edit_or_send_message(message, "✅ Нет заявок на рассмотрении!")
         return
     
     text = f"📋 **Заявки на верификацию ({len(verifications)})**\n\nВыберите заявку для рассмотрения:"
-    await message.answer(text, reply_markup=get_pending_list_keyboard(verifications))
+    from handlers.menu import edit_or_send_message
+    await edit_or_send_message(message, text, reply_markup=get_pending_list_keyboard(verifications))
 
 @router.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: CallbackQuery):

@@ -10,6 +10,104 @@ from utils import is_admin
 router = Router()
 db = Database(DATABASE_URL)
 
+# Словарь для хранения последних сообщений бота для каждого пользователя  
+last_bot_messages = {}
+# Словарь для отслеживания типа предыдущего сообщения (True = с фото, False = текст)
+last_message_has_photo = {}
+
+# Альтернативный подход - редактирование вместо удаления
+async def edit_or_send_message(message: Message, text: str, reply_markup=None, photo=None):
+    """Отредактировать предыдущее сообщение или отправить новое"""
+    user_id = message.from_user.id
+    
+    print(f"🔍 DEBUG edit_or_send_message: user_id={user_id}, photo={'есть' if photo else 'нет'}")
+    print(f"🔍 Сохраненные сообщения: {last_bot_messages}")
+    
+    # Пытаемся удалить сообщение пользователя
+    try:
+        await message.delete()
+        print("✅ Сообщение пользователя удалено")
+    except Exception as e:
+        print(f"❌ Не удалось удалить сообщение пользователя: {e}")
+    
+    # Если есть предыдущее сообщение бота, пытаемся его отредактировать
+    if user_id in last_bot_messages:
+        bot_message_id = last_bot_messages[user_id]
+        previous_had_photo = last_message_has_photo.get(user_id, False)
+        print(f"🔄 Пытаемся отредактировать сообщение с ID: {bot_message_id}")
+        print(f"📊 Предыдущее сообщение было {'с фото' if previous_had_photo else 'текстовое'}")
+        print(f"📊 Новое сообщение будет {'с фото' if photo else 'текстовое'}")
+        
+        # Определяем, можно ли редактировать или нужно удалять/пересоздавать
+        can_edit = not photo and not previous_had_photo  # Только текст → текст можно редактировать
+        
+        try:
+            if can_edit:
+                print("📝 Редактирование: изменяем текст (текст→текст)")
+                # Можем отредактировать текст
+                await message.bot.edit_message_text(
+                    text=text,
+                    chat_id=message.chat.id,
+                    message_id=bot_message_id,
+                    reply_markup=reply_markup
+                )
+                print("✅ Текст сообщения отредактирован")
+                # Возвращаем фейковый объект с существующим ID
+                class FakeMessage:
+                    def __init__(self, message_id):
+                        self.message_id = message_id
+                sent_message = FakeMessage(bot_message_id)
+                
+                # Обновляем тип сообщения
+                last_message_has_photo[user_id] = bool(photo)
+                print(f"💾 Тип сообщения обновлен: {'фото' if photo else 'текст'}")
+                return sent_message
+                
+            else:
+                print(f"🔄 Замена: удаляем старое и отправляем новое ({'фото' if photo else 'текст'})")
+                # Нужно удалить старое и отправить новое (фото↔текст или фото↔фото)
+                await message.bot.delete_message(message.chat.id, bot_message_id)
+                
+                if photo:
+                    sent_message = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup)
+                    print(f"✅ Новое сообщение с фото отправлено, ID: {sent_message.message_id}")
+                else:
+                    sent_message = await message.answer(text, reply_markup=reply_markup)
+                    print(f"✅ Новое текстовое сообщение отправлено, ID: {sent_message.message_id}")
+                
+                # Обновляем ID и тип в словарях
+                last_bot_messages[user_id] = sent_message.message_id
+                last_message_has_photo[user_id] = bool(photo)
+                print(f"💾 ID обновлен: {sent_message.message_id}, тип: {'фото' if photo else 'текст'}")
+                return sent_message
+            
+        except Exception as e:
+            print(f"❌ Не удалось отредактировать сообщение: {e}")
+            # Если не удалось отредактировать, отправляем новое (код ниже)
+            # Удаляем из словарей старые данные
+            if user_id in last_bot_messages:
+                del last_bot_messages[user_id]
+            if user_id in last_message_has_photo:
+                del last_message_has_photo[user_id]
+    
+    # Отправляем новое сообщение
+    print("📤 Отправляем новое сообщение")
+    if photo:
+        sent_message = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup)
+        print(f"✅ Новое сообщение с фото отправлено, ID: {sent_message.message_id}")
+    else:
+        sent_message = await message.answer(text, reply_markup=reply_markup)
+        print(f"✅ Новое текстовое сообщение отправлено, ID: {sent_message.message_id}")
+    
+    # Сохраняем ID сообщения и его тип
+    last_bot_messages[user_id] = sent_message.message_id
+    last_message_has_photo[user_id] = bool(photo)
+    print(f"💾 Сохранен новый ID: {sent_message.message_id}, тип: {'фото' if photo else 'текст'}")
+    print(f"📊 Итоговые сохраненные сообщения: {last_bot_messages}")
+    print(f"📊 Типы сообщений: {last_message_has_photo}")
+    
+    return sent_message
+
 def determine_user_state(user):
     """Определить состояние пользователя на основе данных"""
     if not user or not user.get('name'):
@@ -75,15 +173,11 @@ def get_main_menu_keyboard(user_state: str = 'new', is_user_admin: bool = False,
             # Отклонен - нужны изменения
             keyboard = [
                 [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="✏️ Редактировать")],
-                [KeyboardButton(text="📸 Повторная верификация")]
             ]
         
         # Админская кнопка для всех админов независимо от состояния
         if is_user_admin:
             keyboard.append([KeyboardButton(text="🔧 Админ панель")])
-        
-        # Общие кнопки для всех (кроме админского режима)
-        keyboard.append([KeyboardButton(text="❓ Помощь")])
     
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -125,43 +219,166 @@ def get_inline_menu_keyboard(user_status: str = None, is_user_admin: bool = Fals
     if is_user_admin:
         keyboard.append([InlineKeyboardButton(text="🔧 Админ", callback_data="menu_admin")])
     
-    keyboard.append([InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")])
-    
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 @router.message(F.text == "🚀 Создать анкету")
 async def create_profile_menu(message: Message, state: FSMContext):
     """Создание анкеты через меню"""
+    # Очищаем все предыдущие состояния перед созданием
+    from handlers.state_manager import start_user_operation
+    
+    # Получаем бота из message  
+    bot = message.bot
+    await start_user_operation(message.from_user.id, bot)
+    
     from handlers.registration import start_command
     await start_command(message, state)
+
+async def delete_user_and_bot_messages(message: Message):
+    """Удалить сообщение пользователя и предыдущее сообщение бота"""
+    user_id = message.from_user.id
+    print(f"🔍 DEBUG: Пытаемся удалить сообщения для user_id={user_id}")
+    
+    # Пытаемся удалить сообщение пользователя
+    try:
+        await message.delete()
+        print(f"✅ Сообщение пользователя удалено")
+    except Exception as e:
+        print(f"❌ Не удалось удалить сообщение пользователя: {e}")
+    
+    # Удаляем предыдущее сообщение бота если есть
+    if user_id in last_bot_messages:
+        bot_message_id = last_bot_messages[user_id]
+        print(f"🔍 Найдено предыдущее сообщение бота с ID: {bot_message_id}")
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=bot_message_id
+            )
+            print(f"✅ Предыдущее сообщение бота удалено")
+        except Exception as e:
+            print(f"❌ Не удалось удалить сообщение бота: {e}")
+        
+        # Удаляем из словаря
+        del last_bot_messages[user_id]
+        print(f"🗑️ ID сообщения удалён из словаря")
+    else:
+        print(f"ℹ️ Предыдущих сообщений для удаления не найдено")
+
+async def send_and_save_message(message: Message, text: str, reply_markup=None):
+    """Отправить сообщение и сохранить его ID"""
+    sent_message = await message.answer(text, reply_markup=reply_markup)
+    
+    # Сохраняем ID отправленного сообщения
+    user_id = message.from_user.id
+    message_id = sent_message.message_id
+    last_bot_messages[user_id] = message_id
+    print(f"💾 Сохранён ID сообщения: {message_id} для user_id: {user_id}")
+    print(f"📊 Текущие сохранённые сообщения: {last_bot_messages}")
+    return sent_message
 
 @router.message(F.text == "👤 Моя анкета")
 async def view_profile_menu(message: Message):
     """Просмотр анкеты через меню"""
-    from handlers.registration import view_profile
-    await view_profile(message)
+    try:
+        # Получаем профиль и отправляем
+        user = await db.get_user(message.from_user.id)
+        
+        if not user or not user.get('name'):
+            # Получаем меню для нового пользователя
+            current_menu = get_main_menu_keyboard('new', is_admin(message), admin_mode=False)
+            await edit_or_send_message(message, "❌ У тебя пока нет анкеты. Создай её!", reply_markup=current_menu)
+            return
+
+        # Форматируем анкету
+        status_emoji = get_status_emoji(user.get('verification_status', 'not_requested'))
+        status_text = get_status_text(user.get('verification_status', 'not_requested'))
+        
+        profile_text = f"""👤 **Твоя анкета** {status_emoji}
+
+**Статус:** {status_text}
+**Имя:** {user['name']}
+**Возраст:** {user['age']} лет
+**Курс:** {user['course']}
+**Направление:** {user['major']}
+
+**Описание:**
+{user['description']}"""
+        
+        # Получаем текущее меню для сохранения клавиатуры
+        user_state = determine_user_state(user)
+        is_user_admin = is_admin(message)
+        current_menu = get_main_menu_keyboard(user_state, is_user_admin, admin_mode=False)
+        
+        # Используем новую функцию для редактирования/отправки (она сама удалит и отредактирует)
+        if user.get('photo_file_id'):
+            await edit_or_send_message(message, profile_text, reply_markup=current_menu, photo=user['photo_file_id'])
+        else:
+            await edit_or_send_message(message, profile_text, reply_markup=current_menu)
+    
+    except Exception as e:
+        print(f"❌ Ошибка в view_profile_menu: {e}")
+        # В случае ошибки отправляем простое сообщение
+        await message.answer("❌ Произошла ошибка при загрузке анкеты. Попробуй еще раз.")
 
 @router.message(F.text == "✏️ Редактировать")
 @router.message(F.text.in_(["✏️ Редактировать", "✏️ Изменить анкету"]))
 async def edit_profile_menu(message: Message, state: FSMContext):
     """Редактирование анкеты через меню (унификация названий кнопок)"""
+    # Очищаем все предыдущие состояния перед редактированием
+    from handlers.state_manager import start_user_operation
+    
+    # Получаем бота из message
+    bot = message.bot
+    await start_user_operation(message.from_user.id, bot)
+    
+    # Удаляем сообщение пользователя сначала
+    try:
+        await message.delete()
+        print("✅ Сообщение пользователя (редактировать) удалено")
+    except Exception as e:
+        print(f"❌ Не удалось удалить сообщение пользователя: {e}")
+    
+    # Уведомляем пользователя о смене режима если он был в админке
+    from handlers.admin import is_in_admin_mode
+    was_in_admin = is_in_admin_mode(message.from_user.id)
+    
+    if was_in_admin:
+        await message.answer("🔄 **Режим изменен**\n\nВышел из админ-панели для редактирования анкеты.")
+    
     from handlers.registration import edit_profile_command
     await edit_profile_command(message, state)
 
 @router.message(F.text == "📤 Подать на верификацию")
-async def submit_for_verification_menu(message: Message):
+async def submit_for_verification_menu(message: Message, state: FSMContext):
     """Подача анкеты на верификацию из состояния draft"""
+    # Очищаем все предыдущие состояния
+    from handlers.state_manager import start_user_operation
+    
+    # Получаем бота из message
+    bot = message.bot
+    await start_user_operation(message.from_user.id, bot)
+    
     user = await db.get_user(message.from_user.id)
     
+    # Определяем текущее меню
+    if not user:
+        user_state = 'new'
+        current_menu = get_main_menu_keyboard('new', is_admin(message), admin_mode=False)
+    else:
+        user_state = determine_user_state(user)
+        current_menu = get_main_menu_keyboard(user_state, is_admin(message), admin_mode=False)
+    
     if not user or not user.get('name'):
-        await message.answer("❌ Сначала создай анкету!")
+        await edit_or_send_message(message, "❌ Сначала создай анкету!", reply_markup=current_menu)
         return
         
     if user.get('verification_status') != 'not_requested':
-        await message.answer("❌ Анкета уже подана на верификацию или обработана.")
+        await edit_or_send_message(message, "❌ Анкета уже подана на верификацию или обработана.", reply_markup=current_menu)
         return
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         "📸 **Верификация аккаунта**\n\n"
         "Для подтверждения того, что ты студент, отправь фотографию "
         "своего студенческого билета.\n\n"
@@ -169,12 +386,11 @@ async def submit_for_verification_menu(message: Message):
         "• Четкое изображение\n"
         "• Видны основные данные\n"
         "• Хорошее освещение\n\n"
-        "Отправь фото:"
+        "Отправь фото:",
+        reply_markup=current_menu
     )
     
     from handlers.states import VerificationStates
-    from aiogram.fsm.context import FSMContext
-    state = FSMContext.get_instance()
     await state.set_state(VerificationStates.student_card_photo)
 
 # Админская панель теперь обрабатывается в handlers/admin_mode.py
@@ -184,23 +400,34 @@ async def search_people_menu(message: Message):
     """Поиск людей через меню"""
     user = await db.get_user(message.from_user.id)
     
+    # Определяем текущее меню
+    if not user:
+        user_state = 'new'
+        current_menu = get_main_menu_keyboard('new', is_admin(message), admin_mode=False)
+    else:
+        user_state = determine_user_state(user)
+        current_menu = get_main_menu_keyboard(user_state, is_admin(message), admin_mode=False)
+    
     if not user or user['verification_status'] != 'approved':
-        await message.answer("❌ Эта функция доступна только верифицированным пользователям.")
+        await edit_or_send_message(message, "❌ Эта функция доступна только верифицированным пользователям.", reply_markup=current_menu)
         return
     
     # Проверяем участие в мероприятиях
     events_count = await db.get_user_events_count(user['id'])
     
     if events_count == 0:
-        await message.answer(
+        await edit_or_send_message(
+            message,
             "❌ **Для поиска людей нужно участие в мероприятиях**\n\n"
             "Сначала запишись хотя бы на одно мероприятие:\n"
             "🎉 Используй кнопку **Мероприятия**\n\n"
-            "Это поможет находить людей с общими интересами! 🤝"
+            "Это поможет находить людей с общими интересами! 🤝",
+            reply_markup=current_menu
         )
         return
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         f"🔍 **Поиск людей**\n\n"
         f"👥 Ты участвуешь в {events_count} мероприятии(ях)\n\n"
         "Функция поиска анкет будет доступна в следующем обновлении!\n"
@@ -208,71 +435,78 @@ async def search_people_menu(message: Message):
         "• Просматривать анкеты других студентов\n"
         "• Ставить лайки и дизлайки\n"
         "• Находить людей с общими мероприятиями\n\n"
-        "Следи за обновлениями! 🚀"
+        "Следи за обновлениями! 🚀",
+        reply_markup=current_menu
     )
 
 @router.message(F.text == "🎉 Мероприятия")
 async def events_menu(message: Message):
     """Мероприятия через меню"""
-    from handlers.events import events_list_command
-    await events_list_command(message)
-
-@router.message(F.text == "📸 Повторная верификация")
-async def reverify_menu(message: Message):
-    """Повторная верификация через меню"""
-    from handlers.registration import resend_verification_callback
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
+    # Используем функцию из events.py с правильным названием
+    from handlers.events import get_events_list_keyboard
     
-    # Создаем фейковый callback для переиспользования логики
     user = await db.get_user(message.from_user.id)
     
-    if not user or user['verification_status'] != 'rejected':
-        await message.answer("❌ Повторная верификация доступна только при отклоненной заявке.")
+    # Определяем текущее меню
+    if not user:
+        user_state = 'new'
+        current_menu = get_main_menu_keyboard('new', is_admin(message), admin_mode=False)
+        await edit_or_send_message(message, "❌ Сначала зарегистрируйся в боте!", reply_markup=current_menu)
+        return
+    else:
+        user_state = determine_user_state(user)
+        current_menu = get_main_menu_keyboard(user_state, is_admin(message), admin_mode=False)
+    
+    if user['verification_status'] != 'approved':
+        await edit_or_send_message(message, "❌ Эта функция доступна только верифицированным пользователям.", reply_markup=current_menu)
         return
     
-    await message.answer(
-        "📸 **Повторная верификация**\n\n"
-        "Отправь новое фото со своим студенческим билетом:\n\n"
-        "**Убедись, что:**\n"
-        "• Фото четкое и разборчивое\n"
-        "• Видны все данные студбилета\n"
-        "• Данные соответствуют твоей анкете\n\n"
-        "После отправки фото твоя заявка снова попадет на рассмотрение к администраторам."
-    )
+    events = await db.get_active_events()
     
-    # Устанавливаем состояние для ожидания фото
-    from aiogram import Bot
-    from handlers.states import VerificationStates
-    bot = Bot.get_current()
-    storage = bot.session.middleware.storage if hasattr(bot.session, 'middleware') else None
+    text = f"🎉 **Мероприятия ({len(events)})**\n\n"
+    if events:
+        text += "Выбери мероприятие для подробной информации:"
+    else:
+        text += "Мероприятий пока нет. Следи за обновлениями!"
     
-    if storage:
-        key = StorageKey(bot.id, message.from_user.id, message.from_user.id)
-        await storage.set_state(key, VerificationStates.student_card_photo)
+    # Получаем клавиатуру с мероприятиями (та же что используется в events.py)
+    keyboard = get_events_list_keyboard(events, user['id'])
+    
+    await edit_or_send_message(message, text, reply_markup=keyboard)
+
+# Обработчик "📸 Повторная верификация" удален - функция больше не нужна
+# Пользователи используют кнопку "✏️ Редактировать" для исправления анкеты и повторной подачи
 
 @router.message(F.text == "ℹ️ Статус верификации")
 async def status_menu(message: Message):
     """Проверка статуса верификации через меню"""
     user = await db.get_user(message.from_user.id)
     
+    # Определяем текущее меню
     if not user:
-        await message.answer("❌ У тебя пока нет анкеты.")
+        user_state = 'new'
+        current_menu = get_main_menu_keyboard('new', is_admin(message), admin_mode=False)
+        await edit_or_send_message(message, "❌ У тебя пока нет анкеты.", reply_markup=current_menu)
         return
     
     # Используем новую логику состояний
     user_state = determine_user_state(user)
+    current_menu = get_main_menu_keyboard(user_state, is_admin(message), admin_mode=False)
     
-    await message.answer(
+    await edit_or_send_message(
+        message,
         f"ℹ️ **Статус верификации**\n\n"
         f"Текущее состояние: {get_status_emoji(user_state)} {get_status_text(user_state)}\n\n"
-        f"📅 Анкета создана: {user['created_at'][:10] if user['created_at'] else 'Неизвестно'}"
+        f"📅 Анкета создана: {user['created_at'][:10] if user['created_at'] else 'Неизвестно'}",
+        reply_markup=current_menu
     )
 
 @router.message(F.text == "ℹ️ О боте")
 async def about_bot_menu(message: Message):
     """Информация о боте через меню"""
-    await message.answer(
+    # Используем новую функцию редактирования
+    await edit_or_send_message(
+        message,
         "🎓 **О UniMeetingBot**\n\n"
         "Привет! Я бот для знакомств студентов университета.\n\n"
         "**Что я умею:**\n"
@@ -286,64 +520,6 @@ async def about_bot_menu(message: Message):
         "Для начала создай свою анкету кнопкой 'Создать анкету' 🚀"
     )
 
-@router.message(F.text == "❓ Помощь")
-async def help_menu(message: Message):
-    """Помощь через меню"""
-    user = await db.get_user(message.from_user.id)
-    admin_text = "\n\n🔧 **Админские команды:**\n/admin_panel - панель администратора\n/pending - заявки на верификацию" if is_admin(message) else ""
-    
-    # Используем новую логику состояний
-    user_state = determine_user_state(user) if user else 'new'
-    
-    if user_state == 'approved':
-        await message.answer(
-            "❓ **Помощь**\n\n"
-            "**Доступные функции:**\n"
-            "👤 Моя анкета - посмотреть свою анкету\n"
-            "✏️ Редактировать - изменить данные\n"
-            "🔍 Поиск людей - найти новых друзей\n"
-            "🎉 Мероприятия - студенческие события\n\n"
-            "**Команды:**\n"
-            "/start - главное меню\n"
-            "/profile - показать анкету\n"
-            "/edit - редактировать\n\n"
-            "По вопросам обращайтесь к администраторам." + admin_text
-        )
-    elif user and user['verification_status'] == 'pending':
-        await message.answer(
-            "❓ **Помощь**\n\n"
-            "⏳ Твоя анкета на рассмотрении у администраторов.\n\n"
-            "**Доступные функции:**\n"
-            "👤 Моя анкета - посмотреть анкету\n"
-            "ℹ️ Статус верификации - проверить статус\n\n"
-            "**Команды:**\n"
-            "/start - главное меню\n"
-            "/profile - показать анкету\n\n"
-            "Дождись подтверждения, чтобы получить доступ ко всем функциям!" + admin_text
-        )
-    elif user and user['verification_status'] == 'rejected':
-        await message.answer(
-            "❓ **Помощь**\n\n"
-            "❌ Твоя заявка была отклонена.\n\n"
-            "**Доступные функции:**\n"
-            "✏️ Изменить анкету - исправить данные\n"
-            "📸 Повторная верификация - отправить новое фото\n\n"
-            "**Команды:**\n"
-            "/start - главное меню\n"
-            "/edit - редактировать анкету\n\n"
-            "После изменений подай заявку повторно!" + admin_text
-        )
-    else:
-        await message.answer(
-            "❓ **Помощь**\n\n"
-            "Добро пожаловать в UniMeetingBot!\n\n"
-            "**Для начала работы:**\n"
-            "🚀 Создать анкету - заполнить профиль\n"
-            "ℹ️ О боте - узнать больше\n\n"
-            "**Команды:**\n"
-            "/start - начать регистрацию\n\n"
-            "После создания анкеты пройди верификацию для доступа ко всем функциям!" + admin_text
-        )
 
 # Inline callback обработчики
 @router.callback_query(F.data == "menu_profile")
@@ -443,10 +619,8 @@ async def update_user_menu(message: Message, user_state: str, user_id: int = Non
             self.from_user = from_user_data
     
     # Получаем данные пользователя из Telegram для проверки админа
-    from aiogram import Bot
-    bot = Bot.get_current()
     try:
-        user_info = await bot.get_chat(actual_user_id)
+        user_info = await message.bot.get_chat(actual_user_id)
         fake_message = FakeMessage(user_info)
         is_user_admin = is_admin(fake_message)
     except Exception:
